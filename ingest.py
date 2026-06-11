@@ -1,7 +1,16 @@
 import sys
 import chromadb
 from sentence_transformers import SentenceTransformer
-from config import EMBEDDING_MODEL, CHROMA_PATH, COLLECTION_NAME
+from preprocess import parse_line
+from chunker import chunk_lines
+from config import (
+    EMBEDDING_MODEL,
+    CHROMA_PATH,
+    COLLECTION_NAME,
+    BURST_IP_WINDOW_SECONDS,
+    CHUNK_WINDOW_SECONDS,
+    CHUNK_MAX_SIZE,
+)
 
 
 def ingest(log_path: str) -> None:
@@ -11,33 +20,45 @@ def ingest(log_path: str) -> None:
     model = SentenceTransformer(EMBEDDING_MODEL)
 
     with open(log_path, "r", errors="replace") as f:
-        entries = [
-            (lineno, line.rstrip("\n"))
-            for lineno, line in enumerate(f, start=1)
-            if line.strip()
+        parsed_lines = [
+            parse_line(lineno, raw)
+            for lineno, raw in enumerate(f, start=1)
+            if raw.strip()
         ]
 
-    if not entries:
+    if not parsed_lines:
         print("No non-empty lines found in log file.")
         return
 
-    line_numbers, lines = zip(*entries)
-    line_numbers, lines = list(line_numbers), list(lines)
+    print(f"Parsed {len(parsed_lines)} lines from {log_path}")
 
-    print(f"Embedding {len(lines)} lines from {log_path}...")
-    embeddings = model.encode(lines, show_progress_bar=True).tolist()
+    chunks = chunk_lines(
+        parsed_lines,
+        source=log_path,
+        burst_window_seconds=BURST_IP_WINDOW_SECONDS,
+        time_window_seconds=CHUNK_WINDOW_SECONDS,
+        max_chunk_size=CHUNK_MAX_SIZE,
+    )
 
-    ids = [f"line_{n}" for n in line_numbers]
-    metadatas = [{"line_number": n, "source": log_path} for n in line_numbers]
+    ip_burst_count = sum(1 for c in chunks if c["chunk_type"] == "ip_burst")
+    time_window_count = sum(1 for c in chunks if c["chunk_type"] == "time_window")
+    print(f"Chunked into {len(chunks)} chunks ({ip_burst_count} ip_burst, {time_window_count} time_window)")
+
+    print(f"Embedding {len(chunks)} chunks...")
+    embeddings = model.encode([c["text"] for c in chunks], show_progress_bar=True).tolist()
+
+    ids = [f"chunk_{c['start_line']}_{c['end_line']}" for c in chunks]
+    documents = [c["text"] for c in chunks]
+    metadatas = [{k: v for k, v in c.items() if k != "text"} for c in chunks]
 
     collection.upsert(
         ids=ids,
         embeddings=embeddings,
-        documents=lines,
+        documents=documents,
         metadatas=metadatas,
     )
 
-    print(f"Stored {len(lines)} lines in collection '{COLLECTION_NAME}'.")
+    print(f"Stored {len(chunks)} chunks in collection '{COLLECTION_NAME}'")
 
 
 if __name__ == "__main__":
