@@ -2,6 +2,9 @@
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 OLLAMA_MODEL = "llama3"
 
+# Models to compare in compare.py
+COMPARE_MODELS = ["llama3", "llama3.1:8b", "qwen2.5:7b"]
+
 # ChromaDB configuration
 CHROMA_PATH = "./chroma_db"
 
